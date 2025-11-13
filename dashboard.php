@@ -6,6 +6,45 @@ requireLogin();
 
 $user_id = $_SESSION['user_id'];
 $is_admin = isAdmin();
+$success_message = '';
+$error_message = '';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'cancel_booking') {
+    $reservation_id = isset($_POST['reservation_id']) ? (int)$_POST['reservation_id'] : 0;
+
+    if ($reservation_id <= 0) {
+        $error_message = 'Invalid booking selected.';
+    } else {
+        $stmt = $pdo->prepare("
+            SELECT reservation_id, user_id, status, check_in_date
+            FROM reservations
+            WHERE reservation_id = :reservation_id
+        ");
+        $stmt->execute([':reservation_id' => $reservation_id]);
+        $reservation = $stmt->fetch();
+
+        if (!$reservation) {
+            $error_message = 'Booking not found.';
+        } elseif (!$is_admin && (int)$reservation['user_id'] !== (int)$user_id) {
+            $error_message = 'You are not authorized to cancel this booking.';
+        } elseif ($reservation['status'] === 'cancelled') {
+            $error_message = 'This booking is already cancelled.';
+        } elseif (strtotime($reservation['check_in_date']) <= time()) {
+            $error_message = 'You cannot cancel a booking on or after the check-in date.';
+        } else {
+            $stmt = $pdo->prepare("
+                UPDATE reservations
+                SET status = 'cancelled'
+                WHERE reservation_id = :reservation_id
+            ");
+            if ($stmt->execute([':reservation_id' => $reservation_id])) {
+                $success_message = 'Booking cancelled successfully.';
+            } else {
+                $error_message = 'Failed to cancel the booking. Please try again.';
+            }
+        }
+    }
+}
 
 if ($is_admin) {
     $stmt = $pdo->query("SELECT COUNT(*) as total_rooms FROM rooms");
@@ -296,6 +335,15 @@ if ($is_admin) {
             margin-bottom: 1rem;
             opacity: 0.5;
         }
+
+        .alert {
+            border-radius: 15px;
+            border: none;
+        }
+
+        .cancel-form {
+            display: inline;
+        }
     </style>
 </head>
 <body>
@@ -342,6 +390,18 @@ if ($is_admin) {
             </h1>
             <p class="mb-0 text-muted">Welcome back, <?php echo htmlspecialchars($_SESSION['username']); ?>!</p>
         </div>
+
+        <?php if ($error_message): ?>
+            <div class="alert alert-danger">
+                <i class="fas fa-exclamation-circle"></i> <?php echo htmlspecialchars($error_message); ?>
+            </div>
+        <?php endif; ?>
+
+        <?php if ($success_message): ?>
+            <div class="alert alert-success">
+                <i class="fas fa-check-circle"></i> <?php echo htmlspecialchars($success_message); ?>
+            </div>
+        <?php endif; ?>
 
         <?php if ($is_admin): ?>
             <div class="row g-4 mb-4">
@@ -477,6 +537,7 @@ if ($is_admin) {
                                     <th>Check Out</th>
                                     <th>Amount</th>
                                     <th>Status</th>
+                                    <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -491,6 +552,23 @@ if ($is_admin) {
                                             <span class="status-badge status-<?php echo $booking['status']; ?>">
                                                 <?php echo ucfirst($booking['status']); ?>
                                             </span>
+                                        </td>
+                                        <td>
+                                            <?php
+                                                $allow_cancel = in_array($booking['status'], ['pending', 'confirmed', 'completed']) &&
+                                                    strtotime($booking['check_in_date']) > time();
+                                            ?>
+                                            <?php if ($allow_cancel): ?>
+                                                <form method="POST" action="" class="cancel-form" onsubmit="return confirm('Are you sure you want to cancel this booking?');">
+                                                    <input type="hidden" name="action" value="cancel_booking">
+                                                    <input type="hidden" name="reservation_id" value="<?php echo (int)$booking['reservation_id']; ?>">
+                                                    <button type="submit" class="btn btn-danger btn-sm">
+                                                        <i class="fas fa-ban"></i> Cancel
+                                                    </button>
+                                                </form>
+                                            <?php else: ?>
+                                                <span class="text-muted">—</span>
+                                            <?php endif; ?>
                                         </td>
                                     </tr>
                                 <?php endforeach; ?>
